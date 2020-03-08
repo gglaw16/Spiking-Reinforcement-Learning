@@ -160,7 +160,7 @@ class Controller():
             
             event = self.queue.pop(0)
             if event['time'] > pause_time:
-                return 0 #the id of do nothing
+                return -1
 
             elif event['type'] == 'force_spike':
                 event['neuron'].process_force_spike_input(event)
@@ -172,7 +172,7 @@ class Controller():
                 event['neuron'].update_weights(event)
                 
             
-        return 0 #the id of do nothing
+        return -1
                 
     # get rid of all the events in queue
     def erase_queue(self):
@@ -309,10 +309,6 @@ class Neuron():
         
         # send out a learning event to learn from this spike 
         if self.cause_action == True and not forced:
-            # if this neuron causes an action, we want to: 
-            #     erase whatever events are still in the queue
-            #     send off a last learn event that will output this neuron's id
-            self.controller.erase_queue()
             learning_event = {'neuron':self,'time':self.time+self.learn_event_push,'type':'last_learn','amplitide':None}
             
         else:
@@ -387,11 +383,13 @@ class Neuron():
             # divide each weight by max
             for synapse in self.input_synapses:
                 synapse['weight'] /= max_weight-.0000001
-             
+            
+            
     
     # this adds an input synapse        
     def add_input(self,synapse):
         self.input_synapses.append(synapse)
+        
         
     
     # this adds an output synapse
@@ -452,6 +450,11 @@ class Network():
             self.cause_neuron_spikes(neurons[i],time_list[i])
             
             
+    # uses lists of voltages separated by a time step to input into neurons
+    def input_voltages(self, neurons, voltages_list, time_step):
+        for i in range(len(neurons)):
+            self.input_voltage_into_neuron(neurons[i],voltages_list[i],time_step)
+            
             
     # this just inputs a bunch of voltages at the same time
     def input_image(self,neurons,voltages,time):
@@ -468,6 +471,39 @@ class Network():
                          'amplitude':neuron.spike_amplitude}
             self.controller.add_event(spike)
                
+            
+    # this uses a list of voltages to input into a neuron    
+    def input_voltage_into_neuron(self,neuron,voltages,time_step):
+        time = 0
+        for volt in voltages:
+            spike = {'neuron':neuron, 'time': time, 'type':'voltage',
+                         'amplitude':volt}
+            self.controller.add_event(spike)
+            time += time_step
+           
+            
+    # makes a group of neurons that are all connected to each other, uses random weights
+    def make_connected_group(self, num_neurons, neuron_type, 
+                             synapse_type="excitatory", learn_type=None, 
+                             connectivity=1, self_connected=True, weights=None):
+        conn_group = []
+        for n in range(num_neurons):
+            self.add_neuron(neuron_type,conn_group)
+        
+        for i,neuron1 in enumerate(conn_group):
+            for j,neuron2 in enumerate(conn_group):
+                if self_connected or neuron1 != neuron2:
+                    if connectivity > random.random():
+                        if weights == None:
+                            weight = random.random()
+                            if synapse_type == 'inhibitory':
+                                weight *= -1
+                        else:
+                            weight = weights[i][j]
+                        self.make_synapse(learn_type,neuron1,neuron2,weight)
+        
+        self.neuron_groups.append(conn_group)
+        return conn_group
     
     
     # make a group of neurons

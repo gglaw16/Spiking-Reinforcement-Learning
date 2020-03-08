@@ -395,7 +395,7 @@ if __name__ == '__main__':
     
     print(time)
     old_time = 0
-    for gen in range(1,100):
+    for gen in range(1,10):
         print('GEN %d'%gen)
         net,time,spike_amp,threshold,slope,axon_len,weights =\
             run_generation(net,time,spike_amp,threshold,slope,axon_len,weights)

@@ -39,81 +39,12 @@ import random
 import pdb
 #import cv2
 #import pdb
-from neuronpy.graphics import spikeplot
     
 
 # this just calculates the sigmoid of an array
 def sigmoid(X,thresh,slope):
     return 1/(1+np.exp(-1*slope*X+thresh))
 
-
-# this is needed if you want to see the output of the neurons over time
-class SpikeRecorder():
-                       
-    def __init__(self):
-        # automatically assumes you are recording if you create a recorder
-        self.recording = True
-        # this is an empty dictionary of the labels of each neuron
-        self.labels = {}
-        # initially an empty dictionary, but when full, will have structure {neuron:[], neuron2:[]}
-        self.recordings = {} 
-
-    # this is used to turn on and off recording        
-    def set_recording(self, val):
-        self.recording = val
-
-    # this empties the recordings of each neuron        
-    def reset(self):
-        for neuron in self.recordings:
-            self.recordings[neuron] = []
-
-        
-    # adds a neuron pair to the dictionary
-    def add_neuron(self,neuron, label=None):
-        # if there is no label, set the label to the neuron's id number
-        if label is None:
-            label = "id%d"%neuron.id
-        self.labels[neuron] = label
-        self.recordings[neuron] = []
-
-        
-    # add the events "time" to the appropriate recording
-    def process_event(self,neuron,time):
-        if not self.recording:
-            return
-        if neuron in self.recordings:
-            self.recordings[neuron].append(time)
-
-            
-    # returns the recordings in the format of a list of lists
-    def get_spiketrains(self):
-        # spiketrains should be all the times of the spikes in a list separated by neuron, a list of lists
-        spiketrains = [] 
-        for neuron in self.recordings:
-            times = []
-            for time in self.recordings[neuron]:
-                times.append(time)
-            spiketrains.append(times)
-        return spiketrains
-
-    
-    def plot(self):
-        # spiketrains should be all the times of the spikes in a list separated by neuron, a list of lists
-        spiketrains = self.get_spiketrains()
-                       
-        sp = spikeplot.SpikePlot()
-        sp.set_markerscale(0.5)
-
-        sp.plot_spikes(spiketrains)
-    
-    def plot_one_neuron(self,neuron):
-        if neuron in self.recordings:
-            spiketrain = self.recordings[neuron]
-        
-        sp = spikeplot.SpikePlot()
-        sp.set_markerscale(0.5)
-
-        sp.plot_spikes(spiketrain)
 
 
 # object that manages the event queues
@@ -128,18 +59,7 @@ class Controller():
         self.output = None
     
     def add_event(self,event):
-        if event['type'] == 'voltage':
-            if event['amplitude'] == 0:
-                return
-            
-            if self.condense_voltage_events(event):
-                return
-        elif event['type'] == 'last_learn':
-            self.erase_nonlearning_queue()
-            event['type'] = 'learn'
-            self.output = event['neuron'].id
 
-        
         self.queue.append(event)
         self.queue.sort(key=lambda e:e["time"])
         
@@ -153,7 +73,7 @@ class Controller():
         return False
     
     # this is the main loop for all neurons
-    def run(self, pause_time):
+    def run(self, pause_time, predicting, forcing):
         while len(self.queue) > 0:
             if self.output != None:
                 out = self.output
@@ -170,13 +90,21 @@ class Controller():
                 event['neuron'].process_force_spike_input(event)
                 
             elif event['type'] == 'voltage':
-                event['neuron'].process_voltage_input(event)
+                if not forcing and event['neuron'].cause_action:
+                    event['neuron'].process_voltage_input(event)
                 
             elif event['type'] == 'learn':
-                event['neuron'].update_weights(event)
+                if not predicting:
+                    event['neuron'].update_weights(event)
+                    
+            elif event['type'] == 'last_learn':
+                self.erase_nonlearning_queue()
+                self.output = event['neuron'].id
+                if not predicting:
+                    event['neuron'].update_weights(event)
                 
-            
         return 0 #the id of do nothing
+    
                 
     # get rid of all the events in queue
     def erase_queue(self):
@@ -193,7 +121,7 @@ class Controller():
 # object that holds everything to do with a single neuron
 class Neuron():
     
-    def __init__(self,neuron_type,controller,neuron_id,spike_recorder=None,
+    def __init__(self,neuron_type,controller,neuron_id,
                  is_output=False):
         
         self.id = neuron_id
@@ -206,7 +134,6 @@ class Neuron():
         # learn should be in the synapse dictionary
         self.type = neuron_type
         self.controller = controller
-        self.spike_recorder = spike_recorder
         self.resting_voltage = 0.0
         # we want to start out at resting voltage
         self.voltage = self.resting_voltage
@@ -305,10 +232,6 @@ class Neuron():
             
     # this causes the neuron to output some amplitude of voltage
     def fire(self,amplitude,forced=False):
-
-        # if we are recording, record this spike
-        if self.spike_recorder:
-            self.spike_recorder.process_event(self,self.time)
         
         # after a spike the voltage goes back to the resting potential
         self.voltage = self.resting_voltage
@@ -325,7 +248,7 @@ class Neuron():
             
 
         # send out a learning event to learn from this spike 
-        if self.cause_action == True and not forced:
+        if self.cause_action == True:
             # if this neuron causes an action, we want to: 
             #     erase whatever events are still in the queue
             #     send off a last learn event that will output this neuron's id
@@ -355,11 +278,10 @@ class Neuron():
                     self.learn(synapse,dt)
 
                     
-        self.normalize_input_weights()
+                    
+        #self.normalize_input_weights()
         
         
-                    
-                    
 
     # this causes the synapse to change its weight
     # should have multiple learn types
@@ -380,15 +302,10 @@ class Neuron():
                 synapse['weight'] += synapse['lr'] * (1-(dt/1)) * self.dopamine
                  
 
-                
-        if synapse['weight'] < 0:
-            synapse['weight'] = 0
+        # generally don't want the weight to drop below zero     
+        #if synapse['weight'] < 0:
+        #    synapse['weight'] = 0
             
-
-        
-
-                
-
 
             
     # normalizes all the weights       
@@ -412,7 +329,7 @@ class Neuron():
     def add_output(self,synapse):
         self.output_synapses.append(synapse)
         
-    # this just sets the voltage back to resting
+    # this just sets the voltage back to resting voltage
     def reset_voltage(self):
         self.voltage = self.resting_voltage
 
@@ -424,33 +341,20 @@ class Network():
     def __init__(self):
         
         self.controller = Controller()
-
-        self.spike_recorder = SpikeRecorder()
         
-
         # initialize the array of the grouped neurons
         self.neuron_groups = []
-        
-        # create a main group for non grouped neurons
-        self.main_neuron_group = []
-        
-        # add the main neuron group to the list of groups
-        self.neuron_groups.append(self.main_neuron_group)
         
         
         
     # add a neuron to a specified group
-    def add_neuron(self, neuron_type, neuron_group=None,neuron_id=random.randrange(10,100),is_output=False):
-        # if we don't input a group, it goes into the main neuron group
-        if neuron_group == None:
-            neuron_group = self.main_neuron_group
+    def add_neuron(self, neuron_type, neuron_group, neuron_id=random.randrange(10,100),is_output=False):
             
         # create the neuron
         neuron = Neuron(neuron_type,self.controller,neuron_id,
-                        spike_recorder=self.spike_recorder,is_output=is_output)
+                        is_output=is_output)
         # add it to the group
         neuron_group.append(neuron)
-        self.spike_recorder.add_neuron(neuron)
         return neuron
         
     
@@ -465,19 +369,12 @@ class Network():
 		
         
     # causes neurons of a group to fire
+    # adds extra time on if spike value is above 1
     def fire_neurons(self, neurons, spikes, time):
         for i in range(len(neurons)):
             if spikes[i] != 0:
-                self.cause_neuron_spikes(neurons[i],time+spikes[i]*.1-.1)
+                self.cause_neuron_spikes(neurons[i],time+(spikes[i]-1)*.1)
             
-            
-            
-    # this just inputs a bunch of voltages at the same time
-    def input_image(self,neurons,voltages,time):
-        for i in range(len(neurons)):
-            spike = {'neuron':neurons[i], 'time': time, 'type':'voltage',
-                        'amplitude':voltages[i]}
-            self.controller.add_event(spike)
 		
         
     # this uses a list of times to cause events
@@ -486,7 +383,6 @@ class Network():
                  'type':'force_spike','amplitude':neuron.spike_amplitude}
         self.controller.add_event(spike)
                
-    
     
     # make a group of neurons
     def make_group(self, num_neurons, neuron_type):
@@ -512,26 +408,28 @@ class Network():
         
         for i,neuron1 in enumerate(group1):
             for j,neuron2 in enumerate(group2):
-                if connectivity > random.random():
-                    if weights == None:
-                        weight = random.random()
-                        if synapse_type == 'inhibitory':
-                            weight = -1
-                    else:
-                        weight = weights[j][i]
+                if weights == None:
+                    weight = random.random()
+                    if synapse_type == 'inhibitory':
+                        weight = -1
+                else:
+                    weight = weights[j][i]
 
-                    self.make_synapse(learn_type,neuron1,neuron2,weight,lr,time_delay)
+                self.make_synapse(learn_type,neuron1,neuron2,weight,lr,time_delay)
+                
+                
     
-
+    #sets the ids of an entire group of neurons based on input
     def set_ids_of_group(self,group,ids):
         for neuron,n_id in zip(group,ids):
             neuron.id = n_id    
             
+    # adds (or subtracts) dopamine from a group of neurons
     def flood_with_dopamine(self,neuron_group,reward):
         for neuron in neuron_group:
-
             neuron.dopamine = reward
             
+    # adds (or subtracts) dopamine from all neurons
     def global_dopamine_flood(self,reward):
         for neuron_group in self.neuron_groups:
             self.flood_with_dopamine(neuron_group, reward)
@@ -551,89 +449,26 @@ class Network():
                 if not neuron.cause_action and len(neuron.output_synapses) == 0:
                     group.remove(neuron)
         
-    def reset(self, perturb=False):
+    # resets the network for another round of training
+    def reset(self):
         self.controller.erase_queue()
-        self.spike_recorder.reset()
         for group in self.neuron_groups:
             for neuron in group:
                 neuron.reset_voltage()
                 neuron.time = 0
                 for synapse in neuron.input_synapses:
                     synapse['last_spike_times'] = []
-                    if perturb:
-                        synapse['weight'] += synapse['lr'] * \
-                            (2*(random.random()-.5)) * (2-neuron.dopamine)
-                if perturb:
-                    neuron.type['sigmoid'] = ((2*(random.random()-.5)) * \
-                                              (2-neuron.dopamine),neuron.type['sigmoid'][1])
+                    
                         
-                
-    def set_learning_rates(self,lr,group):
-        for neuron in group:
-            for synapse in neuron.input_synapses:
-                synapse['lr'] = lr
-        
-        
-    def plot_all(self):
-        self.spike_recorder.plot()
-        
-        
-    def plot_neuron_spikes(self,neuron):
-        self.spike_recorder.plot_one_neuron(neuron)
-        
-    def print_weights(self):
-        weights = []
-        for group in self.neuron_groups:
-            each_group = []
-            for neuron in group:
-                each_neuron = []
-                for synapse in neuron.output_synapses:
-                    each_neuron.append(synapse['weight'])
-                if each_neuron != []:
-                    each_group.append(each_neuron)
-            if each_group != []:
-                weights.append(each_group)
-        print(weights)
         
     #run the network
-    def run(self,total_time,record=True):
-        
-        self.spike_recorder.set_recording(record)
-        
-        output_neuron_id = self.controller.run(pause_time=total_time)
+    def run(self,total_time,predicting=False,force_learn=False):
+                
+        output_neuron_id = self.controller.run(total_time,predicting,force_learn)
         
         return output_neuron_id
 
 
 
-        
 
-#This is just a test
-
-'''
-net = Network()
-
-inputs = [2,3,6,1]
-input_layer = net.make_group(4,{'spiking':None,'leak':0,'sigmoid':(4,1),'learn_delay':.1})
-hidden_layer = net.make_group(4,{'spiking':2,'leak':.1,'sigmoid':(4,1),'learn_delay':.1})
-output_layer = net.make_empty_group()
-
-net.add_neuron(neuron_type={'spiking':2,'leak':.1,'sigmoid':(4,1),'learn_delay':.1},
-               neuron_group=output_layer,neuron_id=1,is_output=True)
-
-net.add_neuron(neuron_type={'spiking':2,'leak':.1,'sigmoid':(4,1),'learn_delay':.1},
-               neuron_group=output_layer,neuron_id=2,is_output=True)
-
-net.connect_groups(input_layer,hidden_layer,.3)
-
-net.connect_groups(hidden_layer,output_layer,.3)
-
-net.input_image(input_layer,inputs,0)
-
-out = net.run(1)
-net.plot_neuron_spikes(input_layer[1])
-
-print(out)
-
-'''
 
